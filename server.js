@@ -30,12 +30,25 @@ app.post("/ai", async (req, res) => {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
-    const systemPrompt = `
-Jsi ŠikulAI – bezpečný dětský vzdělávací asistent.
-Vrať POUZE validní JSON bez vysvětlujícího textu.
-Odpověď přizpůsob věku ${age}.
-Předmět: ${subject}.
-Struktura:
+    const response = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      temperature: 0.2,
+      max_tokens: 300,
+      response_format: { type: "json_object" },
+      messages: [
+        {
+          role: "system",
+          content: "Vrať POUZE validní JSON bez jakéhokoliv textu navíc."
+        },
+        {
+          role: "user",
+          content: `
+Odpověz na otázku: "${message}"
+Předmět: ${subject}
+Věk dítěte: ${age}
+
+Struktura odpovědi MUSÍ být přesně:
+
 {
   "otázka": "...",
   "odpověď": {
@@ -45,16 +58,8 @@ Struktura:
   },
   "zdroje": []
 }
-`;
-
-    const response = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      temperature: 0.2,
-      max_tokens: 250,
-      response_format: { type: "json_object" },
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: message }
+`
+        }
       ]
     });
 
@@ -68,8 +73,8 @@ Struktura:
 
     try {
       parsed = JSON.parse(content);
-    } catch (e) {
-      console.error("JSON parse error:", content);
+    } catch (err) {
+      console.error("Model returned invalid JSON:", content);
       return res.status(500).json({ error: "Invalid JSON from model" });
     }
 
