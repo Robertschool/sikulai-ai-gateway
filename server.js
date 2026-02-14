@@ -32,15 +32,24 @@ app.post("/ai", async (req, res) => {
 
     const systemPrompt = `
 Jsi ŠikulAI – bezpečný dětský vzdělávací asistent.
-Vrať pouze validní JSON.
-Přizpůsob odpověď věku ${age}.
+Vrať POUZE validní JSON bez vysvětlujícího textu.
+Odpověď přizpůsob věku ${age}.
 Předmět: ${subject}.
-Maximálně 3 zdroje.
+Struktura:
+{
+  "otázka": "...",
+  "odpověď": {
+    "vysvětlení": "...",
+    "příklady": [],
+    "užitečné_info": "..."
+  },
+  "zdroje": []
+}
 `;
 
     const response = await openai.chat.completions.create({
       model: "gpt-4o-mini",
-      temperature: 0.3,
+      temperature: 0.2,
       max_tokens: 250,
       response_format: { type: "json_object" },
       messages: [
@@ -49,9 +58,22 @@ Maximálně 3 zdroje.
       ]
     });
 
-    const content = response.choices[0].message.content;
+    const content = response.choices[0]?.message?.content;
 
-    return res.json(JSON.parse(content));
+    if (!content) {
+      return res.status(500).json({ error: "Empty OpenAI response" });
+    }
+
+    let parsed;
+
+    try {
+      parsed = JSON.parse(content);
+    } catch (e) {
+      console.error("JSON parse error:", content);
+      return res.status(500).json({ error: "Invalid JSON from model" });
+    }
+
+    return res.json(parsed);
 
   } catch (error) {
     console.error("Runtime error:", error);
