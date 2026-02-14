@@ -41,7 +41,7 @@ Maximálně 3 zdroje.
     const response = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       temperature: 0.3,
-      max_tokens: 400,
+      max_tokens: 250,
       response_format: { type: "json_object" },
       messages: [
         { role: "system", content: systemPrompt },
