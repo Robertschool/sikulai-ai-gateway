@@ -14,7 +14,8 @@ if (!process.env.OPENAI_API_KEY) {
 } else {
   openai = new OpenAI({
     apiKey: process.env.OPENAI_API_KEY
-});
+  });
+}
 
 app.post("/ai", async (req, res) => {
 
@@ -57,7 +58,9 @@ Maximálně 3 zdroje.
     return res.status(500).json({ error: "Gateway runtime error" });
   }
 });
+
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
+
+app.listen(PORT, "0.0.0.0", () => {
   console.log(`AI Gateway running on port ${PORT}`);
 });
