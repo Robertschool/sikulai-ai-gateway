@@ -7,11 +7,21 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
+let openai;
+
+if (!process.env.OPENAI_API_KEY) {
+  console.error("OPENAI_API_KEY is not set");
+} else {
+  openai = new OpenAI({
+    apiKey: process.env.OPENAI_API_KEY
 });
 
 app.post("/ai", async (req, res) => {
+
+  if (!openai) {
+    return res.status(500).json({ error: "AI not configured" });
+  }
+
   try {
     const { message, subject, age } = req.body;
 
@@ -40,14 +50,13 @@ Maximálně 3 zdroje.
 
     const content = response.choices[0].message.content;
 
-    res.json(JSON.parse(content));
+    return res.json(JSON.parse(content));
 
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: "Gateway error" });
+    console.error("Runtime error:", error);
+    return res.status(500).json({ error: "Gateway runtime error" });
   }
 });
-
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`AI Gateway running on port ${PORT}`);
