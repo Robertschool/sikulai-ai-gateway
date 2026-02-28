@@ -3,26 +3,29 @@ import cors from "cors";
 import OpenAI from "openai";
 
 const app = express();
-
 app.use(cors());
 app.use(express.json());
 
-let openai;
-
 if (!process.env.OPENAI_API_KEY) {
-  console.error("OPENAI_API_KEY is not set");
-} else {
-  openai = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY
-  });
+  console.error("❌ OPENAI_API_KEY is not set");
+  process.exit(1);
 }
 
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
+
+// ===============================
+// HEALTH CHECK (pro Railway ping)
+// ===============================
+app.get("/health", (req, res) => {
+  res.status(200).json({ status: "OK" });
+});
+
+// ===============================
+// AI ENDPOINT
+// ===============================
 app.post("/ai", async (req, res) => {
-
-  if (!openai) {
-    return res.status(500).json({ error: "AI not configured" });
-  }
-
   try {
     const { message, subject, age } = req.body;
 
@@ -30,53 +33,60 @@ app.post("/ai", async (req, res) => {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
-    const response = await openai.chat.completions.create({
+    const startTime = Date.now();
+
+    const response = await openai.responses.create({
       model: "gpt-4o-mini",
-      temperature: 0.2,
-      max_tokens: 300,
+      temperature: 0.6,
+      max_output_tokens: 300,
       response_format: { type: "json_object" },
-      messages: [
+      input: [
         {
           role: "system",
-          content: "Vrať POUZE validní JSON bez jakéhokoliv textu navíc."
+          content: `
+Jsi ŠikulAI, vzdělávací asistent pro děti 6–15 let.
+Vysvětluj učivo stručně, jasně a přiměřeně věku.
+Buď přirozený a přidej maximálně jednu krátkou podporující větu.
+Nevkládej zdroje ani obrázky.
+Vrať pouze validní JSON.
+`
         },
         {
           role: "user",
           content: `
-Odpověz na otázku: "${message}"
+Otázka: ${message}
 Předmět: ${subject}
-Věk dítěte: ${age}
+Věk: ${age}
 
-Struktura odpovědi MUSÍ být přesně:
-
+Struktura odpovědi:
 {
-  "otázka": "...",
-  "odpověď": {
-    "vysvětlení": "...",
-    "příklady": [],
-    "užitečné_info": "..."
-  },
-  "zdroje": []
+  "short_answer":"",
+  "main_answer":"",
+  "extra_for_older":"",
+  "confidence":0.0
 }
 `
         }
       ]
     });
 
-    const content = response.choices[0]?.message?.content;
+    const rawOutput = response.output_text;
 
-    if (!content) {
+    if (!rawOutput) {
       return res.status(500).json({ error: "Empty OpenAI response" });
     }
 
     let parsed;
 
     try {
-      parsed = JSON.parse(content);
+      parsed = JSON.parse(rawOutput);
     } catch (err) {
-      console.error("Model returned invalid JSON:", content);
+      console.error("Invalid JSON from model:", rawOutput);
       return res.status(500).json({ error: "Invalid JSON from model" });
     }
+
+    const duration = Date.now() - startTime;
+    console.log(`⚡ Response time: ${duration} ms`);
 
     return res.json(parsed);
 
@@ -86,8 +96,11 @@ Struktura odpovědi MUSÍ být přesně:
   }
 });
 
+// ===============================
+// SERVER START
+// ===============================
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(`AI Gateway running on port ${PORT}`);
+  console.log(`🚀 ŠikulAI Gateway running on port ${PORT}`);
 });
