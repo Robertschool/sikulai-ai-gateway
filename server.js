@@ -6,9 +6,6 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ===============================
-// ENV CHECK
-// ===============================
 if (!process.env.OPENAI_API_KEY) {
   console.error("❌ OPENAI_API_KEY is not set");
   process.exit(1);
@@ -19,14 +16,14 @@ const openai = new OpenAI({
 });
 
 // ===============================
-// HEALTH CHECK (pro Railway ping)
+// HEALTH CHECK
 // ===============================
 app.get("/health", (req, res) => {
   res.status(200).json({ status: "OK" });
 });
 
 // ===============================
-// AI ENDPOINT
+// STREAMING AI ENDPOINT
 // ===============================
 app.post("/ai", async (req, res) => {
   try {
@@ -36,82 +33,53 @@ app.post("/ai", async (req, res) => {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
-    const startTime = Date.now();
+    // Nastavení streamovacích hlaviček
+    res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    res.setHeader("Transfer-Encoding", "chunked");
 
-    const response = await openai.responses.create({
+    const stream = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       temperature: 0.6,
-      max_output_tokens: 300,
-      text: {
-        format: { type: "json_object" }
-      },
-      input: [
+      stream: true,
+      response_format: { type: "json_object" },
+      messages: [
         {
           role: "system",
           content: `
-Jsi ŠikulAI, vzdělávací asistent pro děti ve věku 6–15 let.
-Vysvětluj učivo stručně, jasně a přiměřeně věku dítěte.
-Používej jednoduchý jazyk.
-Přidej maximálně jednu krátkou podporující větu.
-Nevkládej zdroje ani obrázky.
-Vrať pouze validní JSON.
+Jsi ŠikulAI – vzdělávací asistent pro děti 6–15 let.
+Vysvětluj stručně, jasně a přiměřeně věku.
+Pokud je téma vizuální (proces, zvíře, místo, fyzikální jev),
+přidej pole "image_query" s krátkým anglickým dotazem.
+Jinak nech image_query prázdné.
+Vrať pouze JSON.
 `
         },
         {
           role: "user",
-          content: `
-Otázka: ${message}
-Předmět: ${subject}
-Věk: ${age}
-
-Struktura odpovědi:
-{
-  "short_answer": "",
-  "main_answer": "",
-  "extra_for_older": "",
-  "confidence": 0.0
-}
-`
+          content: `subject: ${subject}\nage: ${age}\n\nOtázka: ${message}`
         }
       ]
     });
 
-    // ===============================
-    // SAFE OUTPUT PARSING
-    // ===============================
-    const rawOutput =
-      response.output?.[0]?.content?.[0]?.text;
-
-    if (!rawOutput) {
-      console.error("Unexpected OpenAI response structure:", response);
-      return res.status(500).json({ error: "Invalid OpenAI response structure" });
+    // Streamování dat po částech
+    for await (const chunk of stream) {
+      const content = chunk.choices?.[0]?.delta?.content;
+      if (content) {
+        res.write(content);
+      }
     }
 
-    let parsed;
-
-    try {
-      parsed = JSON.parse(rawOutput);
-    } catch (err) {
-      console.error("Model returned invalid JSON:", rawOutput);
-      return res.status(500).json({ error: "Invalid JSON from model" });
-    }
-
-    const duration = Date.now() - startTime;
-    console.log(`⚡ Response time: ${duration} ms`);
-
-    return res.json(parsed);
+    res.end();
 
   } catch (error) {
-    console.error("Runtime error:", error);
-    return res.status(500).json({ error: "Gateway runtime error" });
+    console.error("Streaming error:", error);
+    res.status(500).end();
   }
 });
 
 // ===============================
-// SERVER START
-// ===============================
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(`🚀 ŠikulAI Gateway running on port ${PORT}`);
+  console.log(`🚀 Railway AI Gateway running on port ${PORT}`);
 });
