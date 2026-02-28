@@ -6,6 +6,9 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// ===============================
+// ENV CHECK
+// ===============================
 if (!process.env.OPENAI_API_KEY) {
   console.error("❌ OPENAI_API_KEY is not set");
   process.exit(1);
@@ -39,14 +42,17 @@ app.post("/ai", async (req, res) => {
       model: "gpt-4o-mini",
       temperature: 0.6,
       max_output_tokens: 300,
-      response_format: { type: "json_object" },
+      text: {
+        format: { type: "json_object" }
+      },
       input: [
         {
           role: "system",
           content: `
-Jsi ŠikulAI, vzdělávací asistent pro děti 6–15 let.
-Vysvětluj učivo stručně, jasně a přiměřeně věku.
-Buď přirozený a přidej maximálně jednu krátkou podporující větu.
+Jsi ŠikulAI, vzdělávací asistent pro děti ve věku 6–15 let.
+Vysvětluj učivo stručně, jasně a přiměřeně věku dítěte.
+Používej jednoduchý jazyk.
+Přidej maximálně jednu krátkou podporující větu.
 Nevkládej zdroje ani obrázky.
 Vrať pouze validní JSON.
 `
@@ -60,20 +66,25 @@ Věk: ${age}
 
 Struktura odpovědi:
 {
-  "short_answer":"",
-  "main_answer":"",
-  "extra_for_older":"",
-  "confidence":0.0
+  "short_answer": "",
+  "main_answer": "",
+  "extra_for_older": "",
+  "confidence": 0.0
 }
 `
         }
       ]
     });
 
-    const rawOutput = response.output_text;
+    // ===============================
+    // SAFE OUTPUT PARSING
+    // ===============================
+    const rawOutput =
+      response.output?.[0]?.content?.[0]?.text;
 
     if (!rawOutput) {
-      return res.status(500).json({ error: "Empty OpenAI response" });
+      console.error("Unexpected OpenAI response structure:", response);
+      return res.status(500).json({ error: "Invalid OpenAI response structure" });
     }
 
     let parsed;
@@ -81,7 +92,7 @@ Struktura odpovědi:
     try {
       parsed = JSON.parse(rawOutput);
     } catch (err) {
-      console.error("Invalid JSON from model:", rawOutput);
+      console.error("Model returned invalid JSON:", rawOutput);
       return res.status(500).json({ error: "Invalid JSON from model" });
     }
 
