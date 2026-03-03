@@ -8,7 +8,7 @@ app.use(cors());
 app.use(express.json());
 
 if (!process.env.OPENAI_API_KEY) {
-  console.error("OPENAI_API_KEY is not set");
+  console.error("❌ OPENAI_API_KEY is not set");
   process.exit(1);
 }
 
@@ -109,10 +109,14 @@ action_type = "evaluate_practice"
 nebo
 1. ✖ špatně – správná odpověď je B, protože ...
 
-- Pokud je více než polovina správně → pochval.
-- Pokud je méně než polovina správně →
-  napiš:
-  "Chceš si to znovu vysvětlit jiným způsobem?"
+- Pokud jsou všechny odpovědi správně, napiš přesně:
+"Skvělá práce! Chválím tě za všechny správné odpovědi."
+
+- Pokud je více než polovina správně, napiš přesně:
+"Chválím tě za správné odpovědi."
+
+- Pokud je méně než polovina správně, napiš přesně:
+"Nevadí, některé odpovědi byly náročné. Pojďme si to zkusit znovu."
 
 Buď podporující.
 `
@@ -171,8 +175,6 @@ Vrať pouze JSON metadata:
   "image_query": "",
   "actions": []
 }
-
-Pravidla:
 
 Nenabízej:
 - check_understanding
