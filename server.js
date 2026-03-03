@@ -7,7 +7,7 @@ app.use(cors());
 app.use(express.json());
 
 if (!process.env.OPENAI_API_KEY) {
-  console.error("❌ OPENAI_API_KEY is not set");
+  console.error("OPENAI_API_KEY is not set");
   process.exit(1);
 }
 
@@ -16,52 +16,48 @@ const openai = new OpenAI({
 });
 
 // ===============================
-// HEALTH CHECK
+// STREAM ENDPOINT (TEXT ONLY)
 // ===============================
-app.get("/health", (req, res) => {
-  res.status(200).json({ status: "OK" });
-});
-
-// ===============================
-// STREAMING AI ENDPOINT
-// ===============================
-app.post("/ai", async (req, res) => {
+app.post("/ai-stream", async (req, res) => {
   try {
-    const { message, subject, age } = req.body;
+    const { message, subject, age, action_type, context } = req.body;
 
-    if (!message || !subject || !age) {
-      return res.status(400).json({ error: "Missing required fields" });
-    }
-
-    // Nastavení streamovacích hlaviček
     res.setHeader("Content-Type", "text/plain; charset=utf-8");
-    res.setHeader("Transfer-Encoding", "chunked");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    res.flushHeaders();
 
     const stream = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       temperature: 0.6,
       stream: true,
-      response_format: { type: "json_object" },
       messages: [
         {
           role: "system",
           content: `
 Jsi ŠikulAI – vzdělávací asistent pro děti 6–15 let.
-Vysvětluj stručně, jasně a přiměřeně věku.
-Pokud je téma vizuální (proces, zvíře, místo, fyzikální jev),
-přidej pole "image_query" s krátkým anglickým dotazem.
-Jinak nech image_query prázdné.
-Vrať pouze JSON.
+Vrať pouze hlavní text odpovědi.
+Nevypisuj JSON.
+Nevypisuj metadata.
+Nevypisuj technické značky.
 `
         },
         {
           role: "user",
-          content: `subject: ${subject}\nage: ${age}\n\nOtázka: ${message}`
+          content: `
+subject: ${subject}
+age: ${age}
+action_type: ${action_type || "normal"}
+context:
+${context || "none"}
+
+Otázka:
+${message}
+`
         }
       ]
     });
 
-    // Streamování dat po částech
     for await (const chunk of stream) {
       const content = chunk.choices?.[0]?.delta?.content;
       if (content) {
@@ -78,8 +74,74 @@ Vrať pouze JSON.
 });
 
 // ===============================
+// METADATA ENDPOINT (JSON ONLY)
+// ===============================
+app.post("/ai-meta", async (req, res) => {
+  try {
+    const { message, subject, age, action_type, context } = req.body;
+
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      temperature: 0.4,
+      response_format: { type: "json_object" },
+      messages: [
+        {
+          role: "system",
+          content: `
+Vrať pouze JSON metadata ve formátu:
+
+{
+  "short_answer": "",
+  "confidence": 0.0,
+  "image_query": "",
+  "actions": []
+}
+
+Pravidla:
+- Vždy přidej akci:
+  { "type": "check_understanding", "label": "Je ti to jasné?" }
+
+- Podle vhodnosti můžeš přidat:
+  explain_more
+  test
+  flashcards
+
+Nevypisuj žádný jiný text.
+`
+        },
+        {
+          role: "user",
+          content: `
+subject: ${subject}
+age: ${age}
+action_type: ${action_type || "normal"}
+context:
+${context || "none"}
+
+Otázka:
+${message}
+`
+        }
+      ]
+    });
+
+    const content = completion.choices[0]?.message?.content;
+    const parsed = JSON.parse(content);
+
+    res.json(parsed);
+
+  } catch (error) {
+    console.error("Metadata error:", error);
+    res.status(500).json({ error: "Metadata generation failed" });
+  }
+});
+
+app.get("/health", (req, res) => {
+  res.status(200).json({ status: "OK" });
+});
+
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(`🚀 Railway AI Gateway running on port ${PORT}`);
+  console.log(`Railway AI Gateway running on port ${PORT}`);
 });
