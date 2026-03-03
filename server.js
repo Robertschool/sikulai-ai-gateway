@@ -3,11 +3,12 @@ import cors from "cors";
 import OpenAI from "openai";
 
 const app = express();
+
 app.use(cors());
 app.use(express.json());
 
 if (!process.env.OPENAI_API_KEY) {
-  console.error("OPENAI_API_KEY is not set");
+  console.error("❌ OPENAI_API_KEY is not set");
   process.exit(1);
 }
 
@@ -15,9 +16,18 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-// ===============================
+
+// =====================================================
+// HEALTH CHECK
+// =====================================================
+app.get("/health", (req, res) => {
+  res.status(200).json({ status: "OK" });
+});
+
+
+// =====================================================
 // STREAM ENDPOINT (TEXT ONLY)
-// ===============================
+// =====================================================
 app.post("/ai-stream", async (req, res) => {
   try {
     const { message, subject, age, action_type, context } = req.body;
@@ -36,10 +46,42 @@ app.post("/ai-stream", async (req, res) => {
           role: "system",
           content: `
 Jsi ŠikulAI – vzdělávací asistent pro děti 6–15 let.
-Vrať pouze hlavní text odpovědi.
-Nevypisuj JSON.
-Nevypisuj metadata.
-Nevypisuj technické značky.
+
+Nikdy nevypisuj JSON.
+Nikdy nevypisuj metadata.
+Nikdy nevypisuj technické značky.
+Vracíš pouze čistý text odpovědi.
+
+--------------------------------------------------
+
+Režimy:
+
+action_type = "normal"
+- Vysvětli téma přiměřeně věku.
+- Buď stručný a jasný.
+
+action_type = "explain_more"
+- Vysvětli jiným způsobem.
+- Použij jiný příklad.
+
+action_type = "example"
+- Ukaž nový konkrétní příklad.
+- Vysvětli ho krok po kroku.
+
+action_type = "practice"
+- Pokud age ≤ 8 → vytvoř 3 úlohy.
+- Pokud age ≥ 9 → vytvoř 5 úloh.
+- Úlohy očísluj.
+- Neuváděj správné odpovědi.
+- Na konci napiš:
+  "Odpověz čísly oddělenými čárkou (např. 1,2,3)."
+
+action_type = "evaluate_practice"
+- Vyhodnoť odpovědi dítěte.
+- U každé úlohy napiš:
+  ✔ správně
+  ✖ špatně – krátké vysvětlení
+- Na konci napiš stručné shrnutí výkonu.
 `
         },
         {
@@ -52,7 +94,7 @@ context:
 ${context || "none"}
 
 Otázka:
-${message}
+${message || ""}
 `
         }
       ]
@@ -73,9 +115,10 @@ ${message}
   }
 });
 
-// ===============================
+
+// =====================================================
 // METADATA ENDPOINT (JSON ONLY)
-// ===============================
+// =====================================================
 app.post("/ai-meta", async (req, res) => {
   try {
     const { message, subject, age, action_type, context } = req.body;
@@ -98,15 +141,36 @@ Vrať pouze JSON metadata ve formátu:
 }
 
 Pravidla:
-- Vždy přidej akci:
-  { "type": "check_understanding", "label": "Je ti to jasné?" }
 
-- Podle vhodnosti můžeš přidat:
-  explain_more
-  test
-  flashcards
+1) Nikdy nevytvářej akci typu:
+   - check_understanding
+   - "Je ti to jasné?"
 
-Nevypisuj žádný jiný text.
+2) Nenabízej obecné kontrolní otázky.
+
+3) Nabízej pouze konkrétní smysluplné akce:
+
+Pokud lze téma vysvětlit jinak:
+{
+  "type": "explain_more",
+  "label": "Vysvětlit jinak"
+}
+
+Pokud lze ukázat další příklad:
+{
+  "type": "example",
+  "label": "Ukázat další příklad"
+}
+
+Pokud je vhodné procvičení:
+{
+  "type": "practice",
+  "label": "Procvičit"
+}
+
+4) Maximálně 3 akce.
+5) Pokud žádná akce nedává smysl, vrať prázdné pole actions.
+6) Nevypisuj žádný jiný text.
 `
         },
         {
@@ -119,7 +183,7 @@ context:
 ${context || "none"}
 
 Otázka:
-${message}
+${message || ""}
 `
         }
       ]
@@ -136,12 +200,10 @@ ${message}
   }
 });
 
-app.get("/health", (req, res) => {
-  res.status(200).json({ status: "OK" });
-});
 
+// =====================================================
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Railway AI Gateway running on port ${PORT}`);
+  console.log(`🚀 Railway AI Gateway running on port ${PORT}`);
 });
