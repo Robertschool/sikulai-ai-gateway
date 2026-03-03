@@ -8,7 +8,7 @@ app.use(cors());
 app.use(express.json());
 
 if (!process.env.OPENAI_API_KEY) {
-  console.error("❌ OPENAI_API_KEY is not set");
+  console.error("OPENAI_API_KEY is not set");
   process.exit(1);
 }
 
@@ -16,14 +16,12 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-
 // =====================================================
 // HEALTH CHECK
 // =====================================================
 app.get("/health", (req, res) => {
   res.status(200).json({ status: "OK" });
 });
-
 
 // =====================================================
 // STREAM ENDPOINT (TEXT ONLY)
@@ -50,38 +48,73 @@ Jsi ŠikulAI – vzdělávací asistent pro děti 6–15 let.
 Nikdy nevypisuj JSON.
 Nikdy nevypisuj metadata.
 Nikdy nevypisuj technické značky.
-Vracíš pouze čistý text odpovědi.
+Vracíš pouze čistý text.
 
 --------------------------------------------------
-
-Režimy:
 
 action_type = "normal"
 - Vysvětli téma přiměřeně věku.
 - Buď stručný a jasný.
 
+--------------------------------------------------
+
 action_type = "explain_more"
 - Vysvětli jiným způsobem.
 - Použij jiný příklad.
+
+--------------------------------------------------
 
 action_type = "example"
 - Ukaž nový konkrétní příklad.
 - Vysvětli ho krok po kroku.
 
+--------------------------------------------------
+
 action_type = "practice"
-- Pokud age ≤ 8 → vytvoř 3 úlohy.
-- Pokud age ≥ 9 → vytvoř 5 úloh.
-- Úlohy očísluj.
-- Neuváděj správné odpovědi.
-- Na konci napiš:
-  "Odpověz čísly oddělenými čárkou (např. 1,2,3)."
+
+Vždy generuj multiple-choice test.
+
+- Pokud age ≤ 8 → vytvoř 3 otázky.
+- Pokud age ≥ 9 → vytvoř 5 otázek.
+
+Každá otázka musí mít přesně 4 možnosti.
+Označ možnosti přesně:
+
+A)
+B)
+C)
+D)
+
+Formát musí být přesně:
+
+1. Otázka text?
+A) možnost
+B) možnost
+C) možnost
+D) možnost
+
+Nevypisuj správnou odpověď.
+Nevypisuj řešení.
+Na konci napiš:
+"Vyber u každé otázky jednu možnost."
+
+--------------------------------------------------
 
 action_type = "evaluate_practice"
-- Vyhodnoť odpovědi dítěte.
-- U každé úlohy napiš:
-  ✔ správně
-  ✖ špatně – krátké vysvětlení
-- Na konci napiš stručné shrnutí výkonu.
+
+- Vyhodnoť odpovědi ve formátu např. A,B,C,D
+- U každé otázky napiš:
+
+1. ✔ správně
+nebo
+1. ✖ špatně – správná odpověď je B, protože ...
+
+- Pokud je více než polovina správně → pochval.
+- Pokud je méně než polovina správně →
+  napiš:
+  "Chceš si to znovu vysvětlit jiným způsobem?"
+
+Buď podporující.
 `
         },
         {
@@ -115,9 +148,8 @@ ${message || ""}
   }
 });
 
-
 // =====================================================
-// METADATA ENDPOINT (JSON ONLY)
+// METADATA ENDPOINT
 // =====================================================
 app.post("/ai-meta", async (req, res) => {
   try {
@@ -131,7 +163,7 @@ app.post("/ai-meta", async (req, res) => {
         {
           role: "system",
           content: `
-Vrať pouze JSON metadata ve formátu:
+Vrať pouze JSON metadata:
 
 {
   "short_answer": "",
@@ -142,35 +174,29 @@ Vrať pouze JSON metadata ve formátu:
 
 Pravidla:
 
-1) Nikdy nevytvářej akci typu:
-   - check_understanding
-   - "Je ti to jasné?"
+Nenabízej:
+- check_understanding
+- "Je ti to jasné?"
 
-2) Nenabízej obecné kontrolní otázky.
+Možné akce:
 
-3) Nabízej pouze konkrétní smysluplné akce:
-
-Pokud lze téma vysvětlit jinak:
 {
   "type": "explain_more",
   "label": "Vysvětlit jinak"
 }
 
-Pokud lze ukázat další příklad:
 {
   "type": "example",
   "label": "Ukázat další příklad"
 }
 
-Pokud je vhodné procvičení:
 {
   "type": "practice",
   "label": "Procvičit"
 }
 
-4) Maximálně 3 akce.
-5) Pokud žádná akce nedává smysl, vrať prázdné pole actions.
-6) Nevypisuj žádný jiný text.
+Maximálně 3 akce.
+Nevypisuj nic jiného.
 `
         },
         {
@@ -200,8 +226,6 @@ ${message || ""}
   }
 });
 
-
-// =====================================================
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, "0.0.0.0", () => {
