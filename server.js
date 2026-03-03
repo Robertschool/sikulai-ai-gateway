@@ -228,6 +228,60 @@ ${message || ""}
   }
 });
 
+// =====================================================
+// TTS ENDPOINT (OpenAI)
+// =====================================================
+app.post("/api/sikulai-tts", async (req, res) => {
+  try {
+    const { text, emotion = "neutral", age = 10 } = req.body;
+
+    if (!text || typeof text !== "string") {
+      return res.status(400).json({ error: "Invalid text input" });
+    }
+
+    const emotionConfig = {
+      neutral:  { voice: "nova",    prefix: "" },
+      happy:    { voice: "shimmer", prefix: "Řekni radostně a povzbudivě: " },
+      thinking: { voice: "nova",    prefix: "Řekni pomalu a zamyšleně: " },
+      excited:  { voice: "shimmer", prefix: "Řekni nadšeně a energicky: " }
+    };
+
+    const selectedEmotion = emotionConfig[emotion] || emotionConfig.neutral;
+
+    let agePrefix = "";
+
+    if (age <= 8) {
+      agePrefix = "Mluv pomalu, jednoduše a s přátelským tónem. ";
+    } else if (age <= 11) {
+      agePrefix = "Mluv jasně a srozumitelně. ";
+    } else {
+      agePrefix = "Mluv přirozeně jako učitel. ";
+    }
+
+    const finalText = agePrefix + selectedEmotion.prefix + text;
+
+    const mp3 = await openai.audio.speech.create({
+      model: "tts-1",
+      voice: selectedEmotion.voice,
+      input: finalText,
+      format: "mp3"
+    });
+
+    const buffer = Buffer.from(await mp3.arrayBuffer());
+    const base64Audio = buffer.toString("base64");
+
+    res.json({
+      audioBase64: base64Audio,
+      voiceUsed: selectedEmotion.voice,
+      emotionApplied: emotion
+    });
+
+  } catch (error) {
+    console.error("TTS error:", error);
+    res.status(500).json({ error: "TTS generation failed" });
+  }
+});
+
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, "0.0.0.0", () => {
