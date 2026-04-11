@@ -294,7 +294,25 @@ Pravidla:
       meta = { actions: ["explain_more", "example", "practice"], confidence: 0.8, image_query: null };
     }
 
-    res.json(meta);
+    // Převod stringů na objekty { label, type } které frontend očekává
+    const ACTION_LABELS = {
+      explain_more: "Vysvětlit jinak",
+      example: "Další příklad",
+      practice: "Procvičit",
+    };
+
+    const actions = (meta.actions || ["explain_more", "example", "practice"]).map((a) => {
+      if (typeof a === "string") {
+        return { type: a, label: ACTION_LABELS[a] || a };
+      }
+      return a; // už je objekt, ponech
+    });
+
+    res.json({
+      actions,
+      confidence: meta.confidence ?? 0.9,
+      image_query: meta.image_query ?? null,
+    });
   } catch (err) {
     console.error("❌ /ai-meta error:", err.message);
     res.status(500).json({ error: "Chyba při generování metadat." });
