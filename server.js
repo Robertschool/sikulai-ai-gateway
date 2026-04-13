@@ -338,16 +338,16 @@ app.post("/ai-meta", async (req, res) => {
           content: `Jsi pomocný asistent. Na základě dotazu dítěte vrať JSON s těmito poli:
 {
   "actions": ["explain_more", "example", "practice"],
-  "confidence": 0.9,
-  "image_query": "krátký anglický výraz pro ilustrační obrázek (2-3 slova) nebo null"
+  "wikipedia_cs": "český název Wikipedia článku nebo null",
+  "wikipedia_en": "anglický název Wikipedia článku nebo null"
 }
 
 Pravidla:
 - actions vždy obsahuje právě tato 3 tlačítka: explain_more, example, practice
-- confidence: odhadni jak fakticky přesná bude odpověď (0.7–0.97), NIKDY nedávej 1.0
-- image_query: VŽDY vyplň relevantní anglický výraz vhodný pro vzdělávací obrázek pro děti
-  Příklady: "fraction pizza math", "water cycle diagram", "roman soldiers", "human heart anatomy"
-  Pouze null pokud je dotaz zcela abstraktní nebo konverzační
+- wikipedia_cs: český název Wikipedia stránky která nejlépe vysvětluje téma (např. "Zlomek", "Fotosyntéza", "Římská říše")
+  Pouze null pokud téma nemá jasnou Wikipedia stránku
+- wikipedia_en: anglický ekvivalent (např. "Fraction", "Photosynthesis", "Roman Empire")
+  Používá se pro načtení náhledového obrázku z Wikipedie
 - Vracíš POUZE validní JSON, žádný jiný text.`,
         },
         {
@@ -362,7 +362,7 @@ Pravidla:
     try {
       meta = JSON.parse(raw);
     } catch {
-      meta = { actions: ["explain_more", "example", "practice"], confidence: 0.85, image_query: null };
+      meta = { actions: ["explain_more", "example", "practice"], wikipedia_cs: null, wikipedia_en: null };
     }
 
     // Převod stringů na objekty { label, type } které frontend očekává
@@ -379,22 +379,31 @@ Pravidla:
       return a;
     });
 
-    // Deterministická confidence – nezávisí jen na modelu
-    const confidence = computeConfidence(message, subject, meta.confidence);
-
-    // image_url: sestavíme z image_query přes loremflickr.com (free, bez API key, stále aktivní)
+    // Wikipedia zdroj odkaz (cs) + náhledový obrázek (en API)
+    let source_url = null;
+    let source_label = null;
     let image_url = null;
-    if (meta.image_query) {
-      const query = encodeURIComponent(meta.image_query);
-      // loremflickr vrací relevantní obrázek podle klíčových slov
-      image_url = `https://loremflickr.com/400/250/${query}`;
+
+    if (meta.wikipedia_cs) {
+      const csTitle = encodeURIComponent(meta.wikipedia_cs);
+      source_url = `https://cs.wikipedia.org/wiki/${csTitle}`;
+      source_label = meta.wikipedia_cs;
+    }
+
+    if (meta.wikipedia_en) {
+      const enTitle = encodeURIComponent(meta.wikipedia_en.replace(/ /g, "_"));
+      // Wikipedia REST API vrací thumbnail obrázek článku – spolehlivé, bez API key
+      image_url = `https://en.wikipedia.org/api/rest_v1/page/summary/${enTitle}`;
+      // Poznámka: frontend musí fetchnout tuto URL a vzít .thumbnail.source
+      // Nebo použijeme přímou thumbnail URL přes commons
     }
 
     res.json({
       actions,
-      confidence,
-      image_query: meta.image_query ?? null,
-      image_url,   // ← NOVÉ: připravená URL pro frontend
+      source_url,
+      source_label,
+      image_url_api: image_url,   // frontend fetchne a vezme thumbnail.source
+      wikipedia_en: meta.wikipedia_en ?? null,
     });
   } catch (err) {
     console.error("❌ /ai-meta error:", err.message);
