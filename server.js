@@ -128,18 +128,33 @@ action_type = "example"
 
 action_type = "practice"
 
-Vždy vytvoř test:
+Vždy vytvoř test. Počet otázek:
 - pokud age ≤ 8 → 3 otázky
 - pokud age ≥ 9 → 5 otázek
 
-Každá otázka musí mít přesně:
-A)
-B)
-C)
-D)
+POVINNÝ FORMÁT – dodržuj PŘESNĚ, každý znak:
+
+1. Text první otázky
+A) možnost jedna
+B) možnost dvě
+C) možnost tři
+D) možnost čtyři
+
+2. Text druhé otázky
+A) možnost jedna
+B) možnost dvě
+C) možnost tři
+D) možnost čtyři
+
+Pravidla formátu:
+- číslo otázky + tečka + mezera + text (např. "1. Jaký je...")
+- každá možnost na samostatném řádku
+- písmeno + závorka + mezera + text (např. "A) text možnosti")
+- mezi otázkami jeden prázdný řádek
+- NIKDY nedávej A) na stejný řádek jako text otázky
+- NIKDY neuváděj správné odpovědi
 
 Na konci napiš: "Vyber u každé otázky jednu možnost."
-Nikdy neuváděj správné odpovědi.
 
 action_type = "evaluate_practice"
 
