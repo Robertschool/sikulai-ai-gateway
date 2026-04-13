@@ -111,12 +111,14 @@ Pokud je to vhodné:
 - buď přátelský a podporující
 - používej přirozený jazyk
 - nebuď formální ani akademický
+- pamatuj si kontext předchozích zpráv v konverzaci a navazuj na ně
 
 --------------------------------------------------
 🔁 CHOVÁNÍ PODLE action_type
 
 action_type = "normal"
 - vysvětli téma jednoduše pomocí příkladů
+- pokud dítě navazuje na předchozí otázku, reaguj v kontextu
 
 action_type = "explain_more"
 - vysvětli jinak než předtím
@@ -207,6 +209,50 @@ function buildUserMessage(message, actionType, context) {
 }
 
 // ─────────────────────────────────────────────
+// HELPER: převede history z frontendu na OpenAI messages formát
+// history = [{ role: "user"|"assistant", content: "..." }, ...]
+// Ořežeme na posledních 6 zpráv (3 páry) aby se nezatěžoval kontext
+// ─────────────────────────────────────────────
+function buildHistory(history) {
+  if (!Array.isArray(history) || history.length === 0) return [];
+  return history
+    .filter(m => m.role && m.content && m.content.trim())
+    .slice(-6)
+    .map(m => ({ role: m.role, content: m.content.trim() }));
+}
+
+// ─────────────────────────────────────────────
+// HELPER: vypočítá confidence rozumně
+// Místo halucinace od modelu počítáme deterministicky:
+// - faktické předměty (mat, fyzika, chemie...) → vysoká confidence
+// - obecné dotazy → střední
+// - vágní nebo mimo předmět → nižší
+// ─────────────────────────────────────────────
+function computeConfidence(message, subject, metaConfidence) {
+  if (!message) return 0.85;
+
+  const factualSubjects = ["matematika", "fyzika", "chemie", "přírodopis", "zeměpis", "dějepis", "informatika"];
+  const isFactual = factualSubjects.some(s => subject.toLowerCase().includes(s));
+
+  const msgLen = message.trim().length;
+  const isSpecific = msgLen > 15; // konkrétní otázka, ne jednoslovná
+
+  // Model vrátil confidence – použijeme ji ale omezíme rozsah
+  // aby se nezobrazovalo 100% pro věci kde si nemůžeme být jisti
+  let base = metaConfidence ?? 0.85;
+
+  // Faktický předmět + konkrétní otázka = max 0.97
+  if (isFactual && isSpecific) base = Math.min(base, 0.97);
+  // Jazykové předměty = trochu méně jisté (subjektivnější)
+  else if (subject.toLowerCase().includes("jazyk") || subject.toLowerCase().includes("angličtina")) base = Math.min(base, 0.92);
+  // Vágní dotaz
+  else if (!isSpecific) base = Math.min(base, 0.80);
+
+  // Nikdy nezobrazujeme 100% – vždy je prostor pro nuanci
+  return Math.min(base, 0.97);
+}
+
+// ─────────────────────────────────────────────
 // POST /ai-stream  →  streamuje čistý text
 // ─────────────────────────────────────────────
 app.post("/ai-stream", async (req, res) => {
@@ -216,6 +262,7 @@ app.post("/ai-stream", async (req, res) => {
     age = 10,
     action_type = "normal",
     context = null,
+    history = [],        // ← NOVÉ: conversation history
   } = req.body;
 
   // Pro action_type volání (explain_more, example, practice) je prázdná message OK
@@ -229,6 +276,10 @@ app.post("/ai-stream", async (req, res) => {
   res.setHeader("X-Accel-Buffering", "no");
 
   try {
+    // Sestavíme messages: system + history + aktuální user message
+    const historyMessages = buildHistory(history);
+    const currentUserMessage = buildUserMessage(message, action_type, context);
+
     const stream = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       max_tokens: 1000,
@@ -239,9 +290,10 @@ app.post("/ai-stream", async (req, res) => {
           role: "system",
           content: buildSystemPrompt(subject, age),
         },
+        ...historyMessages,          // ← vložíme historii před aktuální zprávu
         {
           role: "user",
-          content: buildUserMessage(message, action_type, context),
+          content: currentUserMessage,
         },
       ],
     });
@@ -265,7 +317,7 @@ app.post("/ai-stream", async (req, res) => {
 });
 
 // ─────────────────────────────────────────────
-// POST /ai-meta  →  vrací JSON metadata (akce, confidence)
+// POST /ai-meta  →  vrací JSON metadata (akce, confidence, image_url)
 // ─────────────────────────────────────────────
 app.post("/ai-meta", async (req, res) => {
   const { message, subject = "obecný", age = 10 } = req.body;
@@ -286,14 +338,16 @@ app.post("/ai-meta", async (req, res) => {
           content: `Jsi pomocný asistent. Na základě dotazu dítěte vrať JSON s těmito poli:
 {
   "actions": ["explain_more", "example", "practice"],
-  "confidence": 0.95,
-  "image_query": "volitelný anglický výraz pro ilustrační obrázek nebo null"
+  "confidence": 0.9,
+  "image_query": "krátký anglický výraz pro ilustrační obrázek (2-3 slova) nebo null"
 }
 
 Pravidla:
 - actions vždy obsahuje právě tato 3 tlačítka: explain_more, example, practice
-- confidence je číslo 0.0–1.0 podle toho, jak jasný je dotaz
-- image_query je krátký anglický výraz vhodný pro vyhledání obrázku, nebo null
+- confidence: odhadni jak fakticky přesná bude odpověď (0.7–0.97), NIKDY nedávej 1.0
+- image_query: VŽDY vyplň relevantní anglický výraz vhodný pro vzdělávací obrázek pro děti
+  Příklady: "fraction pizza math", "water cycle diagram", "roman soldiers", "human heart anatomy"
+  Pouze null pokud je dotaz zcela abstraktní nebo konverzační
 - Vracíš POUZE validní JSON, žádný jiný text.`,
         },
         {
@@ -308,7 +362,7 @@ Pravidla:
     try {
       meta = JSON.parse(raw);
     } catch {
-      meta = { actions: ["explain_more", "example", "practice"], confidence: 0.8, image_query: null };
+      meta = { actions: ["explain_more", "example", "practice"], confidence: 0.85, image_query: null };
     }
 
     // Převod stringů na objekty { label, type } které frontend očekává
@@ -322,13 +376,25 @@ Pravidla:
       if (typeof a === "string") {
         return { type: a, label: ACTION_LABELS[a] || a };
       }
-      return a; // už je objekt, ponech
+      return a;
     });
+
+    // Deterministická confidence – nezávisí jen na modelu
+    const confidence = computeConfidence(message, subject, meta.confidence);
+
+    // image_url: sestavíme z image_query přes Unsplash Source (free, bez API key)
+    let image_url = null;
+    if (meta.image_query) {
+      const query = encodeURIComponent(meta.image_query);
+      // Unsplash Source vrací náhodný relevantní obrázek – funguje bez API key
+      image_url = `https://source.unsplash.com/400x250/?${query}`;
+    }
 
     res.json({
       actions,
-      confidence: meta.confidence ?? 0.9,
+      confidence,
       image_query: meta.image_query ?? null,
+      image_url,   // ← NOVÉ: připravená URL pro frontend
     });
   } catch (err) {
     console.error("❌ /ai-meta error:", err.message);
@@ -346,7 +412,6 @@ app.post("/api/sikulai-tts", async (req, res) => {
     return res.status(400).json({ error: "Chybí text." });
   }
 
-  // Emotion → voice mapping
   const voiceMap = {
     neutral: "nova",
     happy: "shimmer",
@@ -355,13 +420,11 @@ app.post("/api/sikulai-tts", async (req, res) => {
   };
   const voice = voiceMap[emotion] || "nova";
 
-  // Věková adaptace rychlosti
   let speed = 1.0;
   if (age <= 8) speed = 0.85;
   else if (age <= 11) speed = 0.95;
   else speed = 1.0;
 
-  // Emotion prefix pro přirozenější intonaci
   const prefixMap = {
     happy: "Radostně: ",
     thinking: "Zamyšleně: ",
