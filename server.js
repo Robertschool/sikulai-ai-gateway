@@ -185,7 +185,8 @@ function buildUserMessage(message, actionType, context) {
     return `Uživatel odpověděl na test: ${message}\n\nKontext testu:\n${context}`;
   }
   if (actionType && actionType !== "normal") {
-    return `[action_type: ${actionType}]\n\n${message}`;
+    const base = message ? message : (context ? `Kontext předchozí odpovědi:\n${context}` : "Pokračuj.");
+    return `[action_type: ${actionType}]\n\n${base}`;
   }
   return message;
 }
@@ -202,7 +203,8 @@ app.post("/ai-stream", async (req, res) => {
     context = null,
   } = req.body;
 
-  if (!message) {
+  // Pro action_type volání (explain_more, example, practice) je prázdná message OK
+  if (!message && (!action_type || action_type === "normal")) {
     return res.status(400).json({ error: "Chybí message." });
   }
 
