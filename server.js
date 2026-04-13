@@ -382,12 +382,12 @@ Pravidla:
     // Deterministická confidence – nezávisí jen na modelu
     const confidence = computeConfidence(message, subject, meta.confidence);
 
-    // image_url: sestavíme z image_query přes Unsplash Source (free, bez API key)
+    // image_url: sestavíme z image_query přes loremflickr.com (free, bez API key, stále aktivní)
     let image_url = null;
     if (meta.image_query) {
       const query = encodeURIComponent(meta.image_query);
-      // Unsplash Source vrací náhodný relevantní obrázek – funguje bez API key
-      image_url = `https://source.unsplash.com/400x250/?${query}`;
+      // loremflickr vrací relevantní obrázek podle klíčových slov
+      image_url = `https://loremflickr.com/400/250/${query}`;
     }
 
     res.json({
