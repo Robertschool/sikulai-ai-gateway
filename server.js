@@ -1,28 +1,75 @@
-import express from "express";
-import cors from "cors";
-import OpenAI from "openai";
+import express from 'express';
+import cors from 'cors';
+import OpenAI from 'openai';
+import crypto from 'crypto';
+import { Resend } from 'resend';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
-
 app.use(cors());
 app.use(express.json());
 
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const resend = new Resend(process.env.RESEND_API_KEY);
+
+const FROM_EMAIL = process.env.EMAIL_FROM || 'ŠikulAI <onboarding@resend.dev>';
+const APP_URL = process.env.APP_URL || 'https://sikulai.com';
+
 // ─────────────────────────────────────────────
-// HELPER: sestaví system prompt
+// HEALTH CHECK
 // ─────────────────────────────────────────────
-function buildSystemPrompt(subject, age) {
+
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok' });
+});
+
+// ─────────────────────────────────────────────
+// ACTION LABELS
+// ─────────────────────────────────────────────
+
+const ACTION_LABELS = {
+  explain_more: 'Vysvětlit jinak',
+  example: 'Další příklad',
+  practice: 'Procvičit',
+};
+
+// ─────────────────────────────────────────────
+// HELPERS
+// ─────────────────────────────────────────────
+
+function buildUserMessage({ message, action_type, context }) {
+  if (action_type === 'explain_more') {
+    return context
+      ? `Vysvětli mi jinak a jiným příkladem toto téma: ${context}`
+      : 'Vysvětli mi to jinak a použij jiný příklad.';
+  }
+  if (action_type === 'example') {
+    return context
+      ? `Dej mi další konkrétní příklad na toto téma: ${context}`
+      : 'Dej mi další příklad.';
+  }
+  if (action_type === 'practice') {
+    return context
+      ? `Vytvoř mi test na toto téma: ${context}`
+      : 'Vytvoř mi test na toto téma.';
+  }
+  if (action_type === 'evaluate_practice') {
+    return message;
+  }
+  return message;
+}
+
+function getSystemPrompt(subject, age) {
   return `
 Jsi ŠikulAI – dětský AI tutor pro děti ve věku 6–15 let.
 
 TVŮJ HLAVNÍ CÍL:
-Vysvětluj učivo tak, aby dítě řeklo: "Aha, už to chápu!"
+Vysvětluj učivo tak, aby dítě řeklo:
+"Aha, už to chápu!"
 
 --------------------------------------------------
+
 🔒 FORMÁT ODPOVĚDI
 
 - Vracíš pouze čistý text.
@@ -31,6 +78,7 @@ Vysvětluj učivo tak, aby dítě řeklo: "Aha, už to chápu!"
 - Nikdy nevysvětluj, jak odpověď vznikla.
 
 --------------------------------------------------
+
 🧠 DIDAKTICKÁ PRAVIDLA (KRITICKÉ)
 
 VŽDY:
@@ -45,6 +93,7 @@ NIKDY:
 - nedělej pouhý výpis informací
 
 --------------------------------------------------
+
 🧩 NAVÁDĚNÍ (Scaffolding – VELMI DŮLEŽITÉ)
 
 Pokud je to vhodné:
@@ -58,9 +107,8 @@ Používej např.:
 Nikdy ale nepokládej příliš složité otázky.
 
 --------------------------------------------------
-👶 VĚKOVÁ ADAPTACE
 
-Aktuální věk dítěte: ${age} let
+👶 VĚKOVÁ ADAPTACE
 
 Pokud age ≤ 8:
 - velmi jednoduché věty
@@ -77,11 +125,10 @@ Pokud age ≥ 12:
 - vysvětli i "proč to tak je"
 
 --------------------------------------------------
+
 📚 KONTROLA PŘEDMĚTU (VELMI DŮLEŽITÉ)
 
-Aktuálně zvolený předmět: ${subject}
-
-Porovnej dotaz s předmětem.
+Porovnej dotaz s předmětem (subject).
 
 Pokud dotaz NEPATŘÍ do zvoleného předmětu:
 - NEVYSVĚTLUJ učivo
@@ -94,9 +141,11 @@ Zkus si prosím přepnout na správný předmět a pak se zeptej znovu."
 A dál už nepokračuj.
 
 --------------------------------------------------
+
 🎯 STRUKTURA VYSVĚTLENÍ
 
 Používej tento postup:
+
 1. jednoduchý příklad
 2. vysvětlení na příkladu
 3. krátké shrnutí
@@ -105,20 +154,20 @@ Pokud je to vhodné:
 - vlož krátkou naváděcí otázku pro dítě
 
 --------------------------------------------------
+
 🗣️ STYL KOMUNIKACE
 
 - mluv jako hodný učitel
 - buď přátelský a podporující
 - používej přirozený jazyk
 - nebuď formální ani akademický
-- pamatuj si kontext předchozích zpráv v konverzaci a navazuj na ně
 
 --------------------------------------------------
+
 🔁 CHOVÁNÍ PODLE action_type
 
 action_type = "normal"
 - vysvětli téma jednoduše pomocí příkladů
-- pokud dítě navazuje na předchozí otázku, reaguj v kontextu
 
 action_type = "explain_more"
 - vysvětli jinak než předtím
@@ -128,53 +177,62 @@ action_type = "example"
 - dej nový konkrétní příklad
 - vysvětli ho krok po kroku
 
+--------------------------------------------------
+
 action_type = "practice"
 
-Vždy vytvoř test. Počet otázek:
+Vždy vytvoř test:
+
 - pokud age ≤ 8 → 3 otázky
 - pokud age ≥ 9 → 5 otázek
 
-POVINNÝ FORMÁT – dodržuj PŘESNĚ, každý znak:
+Každá otázka musí mít PŘESNĚ tento formát:
 
-1. Text první otázky
-A) možnost jedna
-B) možnost dvě
-C) možnost tři
-D) možnost čtyři
+1. Text otázky
+A) možnost
+B) možnost
+C) možnost
+D) možnost
 
-2. Text druhé otázky
-A) možnost jedna
-B) možnost dvě
-C) možnost tři
-D) možnost čtyři
+2. Text otázky
+A) možnost
+B) možnost
+C) možnost
+D) možnost
 
-Pravidla formátu:
-- číslo otázky + tečka + mezera + text (např. "1. Jaký je...")
-- každá možnost na samostatném řádku
-- písmeno + závorka + mezera + text (např. "A) text možnosti")
-- mezi otázkami jeden prázdný řádek
-- NIKDY nedávej A) na stejný řádek jako text otázky
-- NIKDY neuváděj správné odpovědi
+Na konci napiš:
+"Vyber u každé otázky jednu možnost."
 
-Na konci napiš: "Vyber u každé otázky jednu možnost."
+Nikdy neuváděj správné odpovědi.
+
+--------------------------------------------------
 
 action_type = "evaluate_practice"
 
 - vyhodnoť odpovědi (např. A,B,C,D)
 
 Použij:
+
 ✔ správně
 ✖ špatně – správná odpověď je X, protože ...
 
 Na konci:
-- pokud vše správně: "Skvělá práce! Chválím tě za všechny správné odpovědi."
-- pokud více než polovina správně: "Chválím tě za správné odpovědi."
-- pokud méně než polovina správně: "Nevadí, některé odpovědi byly náročné. Pojďme si to zkusit znovu."
+
+- pokud vše správně:
+"Skvělá práce! Chválím tě za všechny správné odpovědi."
+
+- pokud více než polovina správně:
+"Chválím tě za správné odpovědi."
+
+- pokud méně než polovina správně:
+"Nevadí, některé odpovědi byly náročné. Pojďme si to zkusit znovu."
 
 --------------------------------------------------
+
 🧪 INTERNÍ KONTROLA KVALITY (NEZOBRAZUJ)
 
 Před odesláním odpovědi si zkontroluj:
+
 - Je to pochopitelné pro daný věk?
 - Obsahuje to příklad?
 - Není to definice?
@@ -183,6 +241,7 @@ Před odesláním odpovědi si zkontroluj:
 Pokud ne → odpověď zjednoduš.
 
 --------------------------------------------------
+
 🎯 FINÁLNÍ PRAVIDLO
 
 Každá odpověď musí být:
@@ -195,285 +254,309 @@ Cílem je pochopení, ne odborná přesnost.
 }
 
 // ─────────────────────────────────────────────
-// HELPER: sestaví user message
+// AI STREAM
 // ─────────────────────────────────────────────
-function buildUserMessage(message, actionType, context) {
-  if (actionType === "evaluate_practice" && context) {
-    return `Uživatel odpověděl na test: ${message}\n\nKontext testu:\n${context}`;
-  }
-  if (actionType && actionType !== "normal") {
-    const base = message ? message : (context ? `Kontext předchozí odpovědi:\n${context}` : "Pokračuj.");
-    return `[action_type: ${actionType}]\n\n${base}`;
-  }
-  return message;
-}
 
-// ─────────────────────────────────────────────
-// HELPER: převede history z frontendu na OpenAI messages formát
-// history = [{ role: "user"|"assistant", content: "..." }, ...]
-// Ořežeme na posledních 6 zpráv (3 páry) aby se nezatěžoval kontext
-// ─────────────────────────────────────────────
-function buildHistory(history) {
-  if (!Array.isArray(history) || history.length === 0) return [];
-  return history
-    .filter(m => m.role && m.content && m.content.trim())
-    .slice(-6)
-    .map(m => ({ role: m.role, content: m.content.trim() }));
-}
-
-// ─────────────────────────────────────────────
-// HELPER: vypočítá confidence rozumně
-// Místo halucinace od modelu počítáme deterministicky:
-// - faktické předměty (mat, fyzika, chemie...) → vysoká confidence
-// - obecné dotazy → střední
-// - vágní nebo mimo předmět → nižší
-// ─────────────────────────────────────────────
-function computeConfidence(message, subject, metaConfidence) {
-  if (!message) return 0.85;
-
-  const factualSubjects = ["matematika", "fyzika", "chemie", "přírodopis", "zeměpis", "dějepis", "informatika"];
-  const isFactual = factualSubjects.some(s => subject.toLowerCase().includes(s));
-
-  const msgLen = message.trim().length;
-  const isSpecific = msgLen > 15; // konkrétní otázka, ne jednoslovná
-
-  // Model vrátil confidence – použijeme ji ale omezíme rozsah
-  // aby se nezobrazovalo 100% pro věci kde si nemůžeme být jisti
-  let base = metaConfidence ?? 0.85;
-
-  // Faktický předmět + konkrétní otázka = max 0.97
-  if (isFactual && isSpecific) base = Math.min(base, 0.97);
-  // Jazykové předměty = trochu méně jisté (subjektivnější)
-  else if (subject.toLowerCase().includes("jazyk") || subject.toLowerCase().includes("angličtina")) base = Math.min(base, 0.92);
-  // Vágní dotaz
-  else if (!isSpecific) base = Math.min(base, 0.80);
-
-  // Nikdy nezobrazujeme 100% – vždy je prostor pro nuanci
-  return Math.min(base, 0.97);
-}
-
-// ─────────────────────────────────────────────
-// POST /ai-stream  →  streamuje čistý text
-// ─────────────────────────────────────────────
-app.post("/ai-stream", async (req, res) => {
+app.post('/ai-stream', async (req, res) => {
   const {
     message,
-    subject = "obecný",
-    age = 10,
-    action_type = "normal",
+    subject,
+    age,
+    action_type = 'normal',
     context = null,
-    history = [],        // ← NOVÉ: conversation history
+    history = [],
   } = req.body;
 
-  // Pro action_type volání (explain_more, example, practice) je prázdná message OK
-  if (!message && (!action_type || action_type === "normal")) {
-    return res.status(400).json({ error: "Chybí message." });
+  if (!subject || !age) {
+    return res.status(400).json({ error: 'Chybí subject nebo age' });
+  }
+  if (action_type === 'normal' && !message) {
+    return res.status(400).json({ error: 'Chybí message' });
   }
 
-  res.setHeader("Content-Type", "text/plain; charset=utf-8");
-  res.setHeader("Transfer-Encoding", "chunked");
-  res.setHeader("Cache-Control", "no-cache");
-  res.setHeader("X-Accel-Buffering", "no");
+  const userMessage = buildUserMessage({ message, action_type, context });
+
+  const recentHistory = history.slice(-6).map((m) => ({
+    role: m.role,
+    content: m.content,
+  }));
+
+  res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+  res.setHeader('Transfer-Encoding', 'chunked');
+  res.setHeader('X-Accel-Buffering', 'no');
 
   try {
-    // Sestavíme messages: system + history + aktuální user message
-    const historyMessages = buildHistory(history);
-    const currentUserMessage = buildUserMessage(message, action_type, context);
-
     const stream = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      max_tokens: 1000,
-      temperature: 0.5,
+      model: 'gpt-4o-mini',
+      max_tokens: 1024,
+      temperature: 0.7,
       stream: true,
       messages: [
-        {
-          role: "system",
-          content: buildSystemPrompt(subject, age),
-        },
-        ...historyMessages,          // ← vložíme historii před aktuální zprávu
-        {
-          role: "user",
-          content: currentUserMessage,
-        },
+        { role: 'system', content: getSystemPrompt(subject, age) },
+        ...recentHistory,
+        { role: 'user', content: userMessage },
       ],
     });
 
     for await (const chunk of stream) {
-      const text = chunk.choices[0]?.delta?.content || "";
-      if (text) {
-        res.write(text);
-      }
+      const text = chunk.choices[0]?.delta?.content || '';
+      if (text) res.write(text);
     }
 
     res.end();
   } catch (err) {
-    console.error("❌ /ai-stream error:", err.message);
-    if (!res.headersSent) {
-      res.status(500).json({ error: "Chyba při generování odpovědi." });
-    } else {
-      res.end();
-    }
+    console.error('Stream error:', err);
+    res.status(500).end('Chyba při generování odpovědi.');
   }
 });
 
 // ─────────────────────────────────────────────
-// POST /ai-meta  →  vrací JSON metadata (akce, confidence, image_url)
+// AI META
 // ─────────────────────────────────────────────
-app.post("/ai-meta", async (req, res) => {
-  const { message, subject = "obecný", age = 10 } = req.body;
 
-  if (!message) {
-    return res.status(400).json({ error: "Chybí message." });
+app.post('/ai-meta', async (req, res) => {
+  const { message, subject, age, action_type = 'normal' } = req.body;
+
+  if (!subject || !age) {
+    return res.status(400).json({ error: 'Chybí subject nebo age' });
   }
 
-  try {
-    const response = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      max_tokens: 200,
-      temperature: 0.3,
-      response_format: { type: "json_object" },
-      messages: [
-        {
-          role: "system",
-          content: `Jsi pomocný asistent. Na základě dotazu dítěte vrať JSON s těmito poli:
+  const metaPrompt = `
+Na základě tématu "${message || subject}" v předmětu "${subject}" pro dítě věku ${age} let vrať JSON:
 {
   "actions": ["explain_more", "example", "practice"],
-  "wikipedia_cs": "český název Wikipedia článku nebo null",
-  "wikipedia_en": "anglický název Wikipedia článku nebo null"
+  "wikipedia_cs": "Název článku na české Wikipedii (nebo null)",
+  "wikipedia_en": "Article name on English Wikipedia (nebo null)"
 }
+Vrať pouze JSON, nic jiného.
+`;
 
-Pravidla:
-- actions vždy obsahuje právě tato 3 tlačítka: explain_more, example, practice
-- wikipedia_cs: český název Wikipedia stránky která nejlépe vysvětluje téma (např. "Zlomek", "Fotosyntéza", "Římská říše")
-  Pouze null pokud téma nemá jasnou Wikipedia stránku
-- wikipedia_en: anglický ekvivalent (např. "Fraction", "Photosynthesis", "Roman Empire")
-  Používá se pro načtení náhledového obrázku z Wikipedie
-- Vracíš POUZE validní JSON, žádný jiný text.`,
-        },
-        {
-          role: "user",
-          content: `Předmět: ${subject}, věk: ${age}\nDotaz: ${message}`,
-        },
-      ],
+  try {
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      max_tokens: 200,
+      temperature: 0,
+      response_format: { type: 'json_object' },
+      messages: [{ role: 'user', content: metaPrompt }],
     });
 
-    const raw = response.choices[0]?.message?.content || "{}";
-    let meta;
-    try {
-      meta = JSON.parse(raw);
-    } catch {
-      meta = { actions: ["explain_more", "example", "practice"], wikipedia_cs: null, wikipedia_en: null };
-    }
+    const raw = JSON.parse(completion.choices[0].message.content);
 
-    // Převod stringů na objekty { label, type } které frontend očekává
-    const ACTION_LABELS = {
-      explain_more: "Vysvětlit jinak",
-      example: "Další příklad",
-      practice: "Procvičit",
-    };
+    const actions = (raw.actions || ['explain_more', 'example', 'practice']).map(
+      (type) => ({ type, label: ACTION_LABELS[type] || type })
+    );
 
-    const actions = (meta.actions || ["explain_more", "example", "practice"]).map((a) => {
-      if (typeof a === "string") {
-        return { type: a, label: ACTION_LABELS[a] || a };
-      }
-      return a;
-    });
-
-    // Wikipedia zdroj odkaz (cs) + náhledový obrázek (en API)
-    let source_url = null;
-    let source_label = null;
-    let image_url = null;
-
-    if (meta.wikipedia_cs) {
-      const csTitle = encodeURIComponent(meta.wikipedia_cs);
-      source_url = `https://cs.wikipedia.org/wiki/${csTitle}`;
-      source_label = meta.wikipedia_cs;
-    }
-
-    if (meta.wikipedia_en) {
-      const enTitle = encodeURIComponent(meta.wikipedia_en.replace(/ /g, "_"));
-      // Wikipedia REST API vrací thumbnail obrázek článku – spolehlivé, bez API key
-      image_url = `https://en.wikipedia.org/api/rest_v1/page/summary/${enTitle}`;
-      // Poznámka: frontend musí fetchnout tuto URL a vzít .thumbnail.source
-      // Nebo použijeme přímou thumbnail URL přes commons
-    }
+    const wikiCs = raw.wikipedia_cs || null;
+    const wikiEn = raw.wikipedia_en || null;
 
     res.json({
       actions,
-      source_url,
-      source_label,
-      image_url_api: image_url,   // frontend fetchne a vezme thumbnail.source
-      wikipedia_en: meta.wikipedia_en ?? null,
+      source_url: wikiCs ? `https://cs.wikipedia.org/wiki/${encodeURIComponent(wikiCs)}` : null,
+      source_label: wikiCs,
+      wikipedia_en: wikiEn,
     });
   } catch (err) {
-    console.error("❌ /ai-meta error:", err.message);
-    res.status(500).json({ error: "Chyba při generování metadat." });
+    console.error('Meta error:', err);
+    res.json({
+      actions: Object.entries(ACTION_LABELS).map(([type, label]) => ({ type, label })),
+      source_url: null,
+      source_label: null,
+      wikipedia_en: null,
+    });
   }
 });
 
 // ─────────────────────────────────────────────
-// POST /api/sikulai-tts  →  OpenAI TTS → base64 MP3
+// TTS
 // ─────────────────────────────────────────────
-app.post("/api/sikulai-tts", async (req, res) => {
-  const { text, emotion = "neutral", age = 10 } = req.body;
 
-  if (!text) {
-    return res.status(400).json({ error: "Chybí text." });
-  }
+const EMOTION_VOICE = {
+  neutral: 'nova',
+  happy: 'shimmer',
+  thinking: 'nova',
+  excited: 'shimmer',
+};
 
-  const voiceMap = {
-    neutral: "nova",
-    happy: "shimmer",
-    thinking: "nova",
-    excited: "shimmer",
-  };
-  const voice = voiceMap[emotion] || "nova";
+const EMOTION_PREFIX = {
+  happy: 'Radostně: ',
+  thinking: 'Zamyšleně: ',
+  excited: 'Nadšeně: ',
+};
 
-  let speed = 1.0;
-  if (age <= 8) speed = 0.85;
-  else if (age <= 11) speed = 0.95;
-  else speed = 1.0;
+function getSpeed(age) {
+  if (age <= 8) return 0.85;
+  if (age <= 11) return 0.95;
+  return 1.0;
+}
 
-  const prefixMap = {
-    happy: "Radostně: ",
-    thinking: "Zamyšleně: ",
-    excited: "Nadšeně: ",
-  };
-  const prefix = prefixMap[emotion] || "";
-  const finalText = prefix + text;
+app.post('/api/sikulai-tts', async (req, res) => {
+  const { text, emotion = 'neutral', age = 10 } = req.body;
+
+  if (!text) return res.status(400).json({ error: 'Chybí text' });
+
+  const voice = EMOTION_VOICE[emotion] || 'nova';
+  const prefix = EMOTION_PREFIX[emotion] || '';
+  const speed = getSpeed(age);
+  const input = prefix + text;
 
   try {
     const mp3 = await openai.audio.speech.create({
-      model: "tts-1",
-      voice: voice,
-      input: finalText,
-      speed: speed,
+      model: 'tts-1',
+      voice,
+      input,
+      speed,
     });
 
     const buffer = Buffer.from(await mp3.arrayBuffer());
-    const audioBase64 = buffer.toString("base64");
+    const audioBase64 = buffer.toString('base64');
 
-    res.json({
-      audioBase64,
-      voiceUsed: voice,
-      emotionApplied: emotion,
-    });
+    res.json({ audioBase64, voiceUsed: voice, emotionApplied: emotion });
   } catch (err) {
-    console.error("❌ /api/sikulai-tts error:", err.message);
-    res.status(500).json({ error: "Chyba při generování hlasu." });
+    console.error('TTS error:', err);
+    res.status(500).json({ error: 'TTS se nepodařilo vygenerovat' });
   }
 });
 
 // ─────────────────────────────────────────────
-// GET /health  →  Railway health check
+// EMAIL – ŠABLONY
 // ─────────────────────────────────────────────
-app.get("/health", (req, res) => {
-  res.json({ status: "ok", service: "ŠikulAI Gateway" });
+
+function verificationTemplate({ childName, verifyUrl }) {
+  return `<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="font-family:sans-serif;max-width:520px;margin:0 auto;padding:32px 16px;color:#222;background:#fff">
+  <h2 style="font-size:20px;font-weight:600;margin-bottom:8px">Potvrďte registraci ${childName}</h2>
+  <p style="color:#555;line-height:1.6;margin-bottom:24px">
+    Někdo (pravděpodobně vy) zaregistroval účet pro <strong>${childName}</strong> na ŠikulAI –
+    vzdělávacím AI asistentovi pro děti ve věku 6–15 let.
+    Kliknutím na tlačítko níže aktivujete účet.
+  </p>
+  <a href="${verifyUrl}"
+     style="display:inline-block;background:#6c47e8;color:#fff;text-decoration:none;
+            padding:12px 28px;border-radius:8px;font-weight:600;font-size:15px">
+    Potvrdit registraci
+  </a>
+  <p style="color:#888;font-size:13px;margin-top:24px;line-height:1.5">
+    Odkaz je platný 48 hodin.<br>
+    Pokud jste registraci nezahajovali, tento email ignorujte.
+  </p>
+  <hr style="border:none;border-top:1px solid #eee;margin:32px 0">
+  <p style="color:#aaa;font-size:12px;margin:0">ŠikulAI · Vzdělávání pro děti 6–15 let</p>
+</body>
+</html>`;
+}
+
+function welcomeTemplate({ childName }) {
+  return `<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="font-family:sans-serif;max-width:520px;margin:0 auto;padding:32px 16px;color:#222;background:#fff">
+  <h2 style="font-size:20px;font-weight:600;margin-bottom:8px">
+    ${childName} může začít!
+  </h2>
+  <p style="color:#555;line-height:1.6;margin-bottom:24px">
+    Účet byl úspěšně ověřen. ${childName} teď může používat ŠikulAI
+    k procvičování látky, pokládání otázek a přípravě na školu.
+  </p>
+  <a href="${APP_URL}"
+     style="display:inline-block;background:#6c47e8;color:#fff;text-decoration:none;
+            padding:12px 28px;border-radius:8px;font-weight:600;font-size:15px">
+    Otevřít ŠikulAI
+  </a>
+  <hr style="border:none;border-top:1px solid #eee;margin:32px 0">
+  <p style="color:#aaa;font-size:12px;margin:0">ŠikulAI · Vzdělávání pro děti 6–15 let</p>
+</body>
+</html>`;
+}
+
+// ─────────────────────────────────────────────
+// EMAIL – ENDPOINTY
+// ─────────────────────────────────────────────
+
+// Odeslání verifikačního emailu
+// Base44 zavolá hned po vytvoření uživatele v DB
+// Vrátí token + expiresAt → Base44 si je uloží do DB
+app.post('/email/send-verification', async (req, res) => {
+  const { parentEmail, childName } = req.body;
+
+  if (!parentEmail || !childName) {
+    return res.status(400).json({ error: 'Chybí parentEmail nebo childName' });
+  }
+
+  const token = crypto.randomBytes(32).toString('hex');
+  const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000);
+  const verifyUrl = `${APP_URL}/verify?token=${token}`;
+
+  try {
+    await resend.emails.send({
+      from: FROM_EMAIL,
+      to: parentEmail,
+      subject: `Potvrďte registraci ${childName} na ŠikulAI`,
+      html: verificationTemplate({ childName, verifyUrl }),
+    });
+
+    res.json({ success: true, token, expiresAt });
+  } catch (err) {
+    console.error('Verification email error:', err);
+    res.status(500).json({ error: 'Email se nepodařilo odeslat', detail: err.message });
+  }
+});
+
+// Opětovné odeslání verifikace (resend tlačítko)
+app.post('/email/resend-verification', async (req, res) => {
+  const { parentEmail, childName } = req.body;
+
+  if (!parentEmail || !childName) {
+    return res.status(400).json({ error: 'Chybí parentEmail nebo childName' });
+  }
+
+  const token = crypto.randomBytes(32).toString('hex');
+  const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000);
+  const verifyUrl = `${APP_URL}/verify?token=${token}`;
+
+  try {
+    await resend.emails.send({
+      from: FROM_EMAIL,
+      to: parentEmail,
+      subject: `Potvrďte registraci ${childName} na ŠikulAI`,
+      html: verificationTemplate({ childName, verifyUrl }),
+    });
+
+    res.json({ success: true, token, expiresAt });
+  } catch (err) {
+    console.error('Resend verification error:', err);
+    res.status(500).json({ error: 'Email se nepodařilo odeslat', detail: err.message });
+  }
+});
+
+// Uvítací email – Base44 zavolá po úspěšné verifikaci tokenu
+app.post('/email/send-welcome', async (req, res) => {
+  const { parentEmail, childName } = req.body;
+
+  if (!parentEmail || !childName) {
+    return res.status(400).json({ error: 'Chybí parentEmail nebo childName' });
+  }
+
+  try {
+    await resend.emails.send({
+      from: FROM_EMAIL,
+      to: parentEmail,
+      subject: `${childName} je připraven/a učit se na ŠikulAI!`,
+      html: welcomeTemplate({ childName }),
+    });
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Welcome email error:', err);
+    res.status(500).json({ error: 'Email se nepodařilo odeslat', detail: err.message });
+  }
 });
 
 // ─────────────────────────────────────────────
 // START
 // ─────────────────────────────────────────────
+
 app.listen(PORT, () => {
-  console.log(`✅ ŠikulAI Gateway běží na portu ${PORT}`);
+  console.log(`ŠikulAI server running on port ${PORT}`);
 });
